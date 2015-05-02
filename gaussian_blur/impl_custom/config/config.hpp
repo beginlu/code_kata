@@ -1,0 +1,16 @@
+#ifndef TEST_GAUSSIAN_BLUR_IMPL_CUSTOM_CONFIG_HPP_
+#define TEST_GAUSSIAN_BLUR_IMPL_CUSTOM_CONFIG_HPP_
+
+#include "cuda_runtime.h"
+
+#if __CUDACC__ >= 200
+# define TGB_MAX_CUDA_CONSTANT_SIZE 65536
+#else
+# define TGB_MAX_CUDA_CONSTANT_SIZE 65536
+#endif
+
+#define TGB_SECTION_BEGIN(...) {;
+#define TGB_SECTION_END(...)   } SEC_##__VA_ARGS__:;
+#define TGB_SECTION_BREAK(...) goto SEC_##__VA_ARGS__;
+
+#endif // TEST_GAUSSIAN_BLUR_IMPL_CUSTOM_CONFIG_HPP_
