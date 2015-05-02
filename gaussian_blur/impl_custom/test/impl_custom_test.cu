@@ -160,7 +160,7 @@ namespace test_gaussian_blur {
       }
       
       fprintf(
-        stdout, "Info: Test on (%d, %d, %d, %d).\n",
+        stdout, "Test on image size (%d x %d), kernel size (%d x %d).\n",
         width, height, kernel_x_size, kernel_y_size);
 
       ST *h_src_data_ptr      = &src_array[0];
@@ -310,6 +310,8 @@ namespace test_gaussian_blur {
       }
       ////////////////////////////////////////////////////////////////////
 
+      fprintf(stdout, "\n");
+
       cudaFree(d_dst_cust_data_ptr);
       cudaFree(d_dst_ocv_data_ptr);
       cudaFree(d_src_data_ptr);
@@ -335,8 +337,10 @@ namespace test_gaussian_blur {
   }
 
   int ImplCustomTest3(void) {
-    cv::Mat ocv_src_mat = cv::imread(
-      "I:\\Project\\VC\\Shared\\opencv\\kit\\2.4.9\\samples\\c\\lena.jpg");
+    const std::string src_path = "fruits.jpg";
+    const std::string dst_path = "fruits_blured.jpg";
+
+    cv::Mat ocv_src_mat = cv::imread(src_path);
     cv::Mat ocv_dst_mat(
       ocv_src_mat.size(), ocv_src_mat.type());
 
@@ -349,6 +353,10 @@ namespace test_gaussian_blur {
       ocv_src_mat.cols, ocv_src_mat.rows,
       15, 15, 0.0, 0.0, BorderType::kReflect101);
 
+    std::vector<int> save_params;
+    save_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+    save_params.push_back(98);
+    cv::imwrite(dst_path, ocv_dst_mat, save_params);
     cv::imshow("Original", ocv_src_mat);
     cv::imshow("Blured", ocv_dst_mat);
     cv::waitKey();
