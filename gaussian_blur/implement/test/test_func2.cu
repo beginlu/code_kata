@@ -39,9 +39,7 @@ namespace test_gaussian_blur {
     config_array.push_back(ConfigSet(5616, 3744, 3, 13, 13, BorderType::kReflect101));
     config_array.push_back(ConfigSet(5616, 3744, 3, 15, 15, BorderType::kReflect101));
     config_array.push_back(ConfigSet(5616, 3744, 3, 31, 31, BorderType::kReflect101));
-
-    LARGE_INTEGER tfreq, tbegin, tend;
-    QueryPerformanceFrequency(&tfreq);
+    //config_array.push_back(ConfigSet(3000, 2000, 8, 15, 15, BorderType::kReflect101));
 
     cudaError_t cuda_error  = cudaSuccess;
     ST *d_src_data_ptr      = nullptr;
@@ -125,66 +123,104 @@ namespace test_gaussian_blur {
           config.kernel_x_size_, config.kernel_y_size_,
           border_string.c_str());
 
-      const int LOOP = 10;
+      const int LOOP = 20;
       const int ocv_src_type =
           CV_MAKE_TYPE(cv::DataDepth<ST>::value, config.channels_);
       const int ocv_dst_type =
           CV_MAKE_TYPE(cv::DataDepth<DT>::value, config.channels_);
 
+      LARGE_INTEGER tfreq, tbegin, tend;
+      //QueryPerformanceFrequency(&tfreq);
+      tfreq.QuadPart = 1000;
+
       ////////////////////////////////////////////////////////////////////
       // 1. test opencv cpu implement
       if (config.border_type_ != BorderType::kWrap)
       {
-        cv::Mat ocv_src_mat(
+        if (config.channels_ <= 4) {
+          cv::Mat ocv_src_mat(
             config.height_, config.width_, ocv_src_type,
             h_src_data_ptr, src_stride);
-        cv::Mat ocv_dst_mat(
-            config.height_, config.width_, ocv_dst_type,
-            h_dst_ocv_data_ptr, dst_stride);
+          cv::Mat ocv_dst_mat(
+              config.height_, config.width_, ocv_dst_type,
+              h_dst_ocv_data_ptr, dst_stride);
 
-        // loop multiple times to get average run time
-        QueryPerformanceCounter(&tbegin);
-        for (int l = 0; l < LOOP; ++l) {
-          cv::GaussianBlur(
-              ocv_src_mat, ocv_dst_mat,
-              cv::Size(config.kernel_x_size_, config.kernel_y_size_),
-              0.0, 0.0, ocv_border_type);
+          // loop multiple times to get average run time
+          tbegin.QuadPart = timeGetTime();
+          //QueryPerformanceCounter(&tbegin);
+          for (int l = 0; l < LOOP; ++l) {
+            cv::GaussianBlur(
+                ocv_src_mat, ocv_dst_mat,
+                cv::Size(config.kernel_x_size_, config.kernel_y_size_),
+                0.0, 0.0, ocv_border_type);
+          }
+          tend.QuadPart = timeGetTime();
+          //QueryPerformanceCounter(&tend);
+          TGB_LOG_INFO(
+              "OpenCV CPU implement use time %.6lfms.\n",
+              (tend.QuadPart-tbegin.QuadPart)*1000.0/tfreq.QuadPart/LOOP);
+        } else {
+          // loop multiple times to get average run time
+          QueryPerformanceCounter(&tbegin);
+          for (int l = 0; l < LOOP; ++l) {
+#           pragma omp parallel for
+            for (int c = 0; c < config.channels_; ++c) {
+              cv::Mat ocv_src_mat(
+                  config.height_, config.width_,
+                  CV_MAKE_TYPE(cv::DataDepth<ST>::value, 1),
+                  h_src_data_ptr+config.height_*config.width_*c,
+                  config.width_*sizeof(ST));
+              cv::Mat ocv_dst_mat(
+                  config.height_, config.width_,
+                  CV_MAKE_TYPE(cv::DataDepth<DT>::value, 1),
+                  h_dst_ocv_data_ptr+config.height_*config.width_*c,
+                  config.width_*sizeof(ST));
+              cv::GaussianBlur(
+                  ocv_src_mat, ocv_dst_mat,
+                  cv::Size(config.kernel_x_size_, config.kernel_y_size_),
+                  0.0, 0.0, ocv_border_type);
+              }
+          }
+          QueryPerformanceCounter(&tend);
+          TGB_LOG_INFO(
+              "OpenCV CPU implement use time %.6lfms.\n",
+              (tend.QuadPart-tbegin.QuadPart)*1000.0/tfreq.QuadPart/LOOP);
         }
-        QueryPerformanceCounter(&tend);
-        TGB_LOG_INFO(
-            "OpenCV CPU implement use time %.6lfms.\n",
-            (tend.QuadPart-tbegin.QuadPart)*1000.0/tfreq.QuadPart/LOOP);
       }
       ////////////////////////////////////////////////////////////////////
 
       ////////////////////////////////////////////////////////////////////
       // 2. test opencv gpu implement
-      if (config.border_type_ != BorderType::kWrap &&
-          config.channels_ <= 4)
+      if (config.border_type_ != BorderType::kWrap)
       {
-        cv::gpu::GpuMat ocv_src_mat(
-            config.height_, config.width_, ocv_src_type,
-            d_src_data_ptr, src_stride);
-        cv::gpu::GpuMat ocv_dst_mat(
-            config.height_, config.width_, ocv_dst_type,
-            d_dst_ocv_data_ptr, dst_stride);
+        if (config.channels_ <= 4) {
+          cv::gpu::GpuMat ocv_src_mat(
+              config.height_, config.width_, ocv_src_type,
+              d_src_data_ptr, src_stride);
+          cv::gpu::GpuMat ocv_dst_mat(
+              config.height_, config.width_, ocv_dst_type,
+              d_dst_ocv_data_ptr, dst_stride);
 
-        // warm-up
-        dummy<<<1, 1>>>();
-
-        // loop multiple times to get average run time
-        QueryPerformanceCounter(&tbegin);
-        for (int l = 0; l < LOOP; ++l) {
-          cv::gpu::GaussianBlur(
-              ocv_src_mat, ocv_dst_mat,
-              cv::Size(config.kernel_x_size_, config.kernel_y_size_),
-              0.0, 0.0, ocv_border_type);
+          // warm-up
+          dummy<<<1, 1>>>();
           cudaDeviceSynchronize();
+
+          // loop multiple times to get average run time
+          tbegin.QuadPart = timeGetTime();
+          //QueryPerformanceCounter(&tbegin);
+          for (int l = 0; l < LOOP; ++l) {
+            cv::gpu::GaussianBlur(
+                ocv_src_mat, ocv_dst_mat,
+                cv::Size(config.kernel_x_size_, config.kernel_y_size_),
+                0.0, 0.0, ocv_border_type);
+            cudaDeviceSynchronize();
+          }
+          tend.QuadPart = timeGetTime();
+          //QueryPerformanceCounter(&tend);
+          TGB_LOG_INFO(
+              "OpenCV GPU implement use time %.6lfms.\n",
+              (tend.QuadPart-tbegin.QuadPart)*1000.0/tfreq.QuadPart/LOOP);
         }
-        QueryPerformanceCounter(&tend);
-        TGB_LOG_INFO(
-            "OpenCV GPU implement use time %.6lfms.\n",
-            (tend.QuadPart-tbegin.QuadPart)*1000.0/tfreq.QuadPart/LOOP);
       }
       ////////////////////////////////////////////////////////////////////
 
@@ -200,8 +236,11 @@ namespace test_gaussian_blur {
 
         // warm-up
         dummy<<<1, 1>>>();
+        cudaDeviceSynchronize();
+
         // loop multiple times to get average run time
-        QueryPerformanceCounter(&tbegin);
+        tbegin.QuadPart = timeGetTime();
+        //QueryPerformanceCounter(&tbegin);
         for (int l = 0; l < LOOP; ++l) {
           GaussianBlurDevice(
               src_picker, dst_picker,
@@ -209,7 +248,8 @@ namespace test_gaussian_blur {
               0.0, 0.0, config.border_type_);
           cudaDeviceSynchronize();
         }
-        QueryPerformanceCounter(&tend);
+        tend.QuadPart = timeGetTime();
+        //QueryPerformanceCounter(&tend);
         TGB_LOG_INFO(
             "Custom GPU implement use time %.6lfms.\n",
             (tend.QuadPart-tbegin.QuadPart)*1000.0/tfreq.QuadPart/LOOP);

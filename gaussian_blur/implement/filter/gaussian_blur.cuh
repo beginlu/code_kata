@@ -28,9 +28,10 @@ namespace test_gaussian_blur {
     // shared memory use to cache block image data
     extern __shared__ unsigned char s_shared[];
 
-    const int &width           = src_picker.width_;
+    // unfold channels
     const int &channels        = src_picker.channels_;
-    const int half_kernel_size = kernel_size/2;
+    const int width            = src_picker.width_*channels;
+    const int half_kernel_size = kernel_size/2*channels;
     const int region_offset    = region_size*blockIdx.x;
 
     const int y_offset = blockDim.y*blockIdx.y+threadIdx.y;
@@ -39,62 +40,67 @@ namespace test_gaussian_blur {
     }
 
     PixelPicker<DT> cached_picker(
-        blockDim.y, 2*half_kernel_size+region_size, channels,
-        (2*half_kernel_size+region_size)*channels*sizeof(DT),
+        blockDim.y, 2*half_kernel_size+region_size, 1,
+        (2*half_kernel_size+region_size)*sizeof(DT),
         reinterpret_cast<DT*>(s_shared));
     RowBorderPicker<ST, BT> border_picker(
         y_offset, src_picker);
 
     ST *src_data_ptr =
-        src_picker.get_pixel(y_offset, region_offset-half_kernel_size);
+        src_picker.get_pixel(
+        y_offset, (region_offset-half_kernel_size)/channels)+
+        region_offset%channels;
     DT *cached_data_ptr =
         cached_picker.get_row(threadIdx.y);
 
     if (region_offset-half_kernel_size < 0) {
       // load left-most blocks' left padding area
-      for (int i = threadIdx.x; i < half_kernel_size*channels; i += blockDim.x) {
+      for (int i = threadIdx.x; i < half_kernel_size; i += blockDim.x) {
+        const int pos_offset = region_offset+i;
         cached_data_ptr[i] = static_cast<DT>(border_picker.get_lower_value(
-            region_offset-half_kernel_size+i/channels, i%channels));
+            pos_offset/channels-half_kernel_size/channels, pos_offset%channels));
       }
     } else {
       // load other blocks' left padding area
-      for (int i = threadIdx.x; i < half_kernel_size*channels; i += blockDim.x) {
+      for (int i = threadIdx.x; i < half_kernel_size; i += blockDim.x) {
         cached_data_ptr[i] = src_data_ptr[i];
       }
     }
 
     //__syncthreads();
 
-    src_data_ptr    += half_kernel_size*channels;
-    cached_data_ptr += half_kernel_size*channels;
+    src_data_ptr    += half_kernel_size;
+    cached_data_ptr += half_kernel_size;
 
     if (region_offset+region_size+half_kernel_size > width) {
       const int remain_size = ::min(
           region_size, width-region_offset)+half_kernel_size;
       // load right-most blocks' middle and right padding area
-      for (int i = threadIdx.x; i < remain_size*channels; i += blockDim.x) {
+      for (int i = threadIdx.x; i < remain_size; i += blockDim.x) {
+        const int pos_offset = region_offset+i;
         cached_data_ptr[i] = static_cast<DT>(border_picker.get_higher_value(
-            region_offset+i/channels, i%channels));
+            pos_offset/channels, pos_offset%channels));
       }
     } else {
       const int remain_size = region_size+half_kernel_size;
       // load other blocks' middle and right padding area
-      for (int i = threadIdx.x; i < remain_size*channels; i += blockDim.x) {
+      for (int i = threadIdx.x; i < remain_size; i += blockDim.x) {
         cached_data_ptr[i] = src_data_ptr[i];
       }
     }
 
     __syncthreads();
 
-    cached_data_ptr -= half_kernel_size*channels;
+    cached_data_ptr -= half_kernel_size;
 
     // making convolution
     DT *dst_data_ptr =
-        dst_picker.get_pixel(y_offset, region_offset);
+        dst_picker.get_pixel(y_offset, region_offset/channels)+
+        region_offset%channels;
     const KT *kernel_data_ptr =
         reinterpret_cast<const KT*>(c_const);
-    for (int i = threadIdx.x; i < region_size*channels; i += blockDim.x) {
-      if (region_offset+i/channels < width) {
+    for (int i = threadIdx.x; i < region_size; i += blockDim.x) {
+      if (region_offset+i < width) {
         DT sum = 0;
         for (int j = 0; j < kernel_size; ++j) {
           sum += cached_data_ptr[i+j*channels]*kernel_data_ptr[j];
@@ -226,10 +232,9 @@ namespace test_gaussian_blur {
 
     block_x_size = 32;
     block_y_size = 4;
-    region_size  = std::max(1, std::min(image_width,
-        (block_x_size*4)/image_channels));
+    region_size  = std::min(block_x_size*4, image_width*image_channels);
     alloc_shared_mem_size_in_bytes =
-        block_y_size*(2*half_kernel_size+region_size)*image_channels*sizeof(T);
+        block_y_size*(2*half_kernel_size*image_channels+region_size)*sizeof(T);
     if (alloc_shared_mem_size_in_bytes > shared_mem_size_in_bytes) {
       return -1;
     }
@@ -290,7 +295,7 @@ namespace test_gaussian_blur {
       const dim3 blockDim(
           block_x_size, block_y_size);
       const dim3 gridDim(
-          (src_picker.width_+region_size-1)/region_size,
+          (src_picker.width_*src_picker.channels_+region_size-1)/region_size,
           (src_picker.height_+block_y_size-1)/block_y_size);
       switch (border_type) {
         case BorderType::kReplicate: {
@@ -604,9 +609,9 @@ namespace test_gaussian_blur {
         src_picker.channels_ == buf_picker.channels_);
     assert(
         kernel_x_size > 0 && (kernel_x_size & 0x1) == 0x1 &&
-        kernel_x_size/2+1 < src_picker.width_ &&
+        kernel_x_size/2+1 <= src_picker.width_ &&
         kernel_y_size > 0 && (kernel_y_size & 0x1) == 0x1 &&
-        kernel_y_size/2+1 < src_picker.height_);
+        kernel_y_size/2+1 <= src_picker.height_);
 
     typedef FT KT;
     KT *h_kernel_x_ptr = nullptr;
